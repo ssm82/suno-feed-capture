@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "Suno Feed Capture",
+  "version": "1.7.0",
+  "description": "Captures responses from studio-api-prod.suno.com/api/feed/v3 and lets you browse, play and export them.",
+  "minimum_chrome_version": "111",
+  "permissions": [
+    "storage",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://suno.com/*",
+    "https://*.suno.com/*",
+    "https://suno.ai/*",
+    "https://*.suno.ai/*",
+    "https://studio-api-prod.suno.com/*"
+  ],
+  "action": {
+    "default_title": "Suno Feed Capture",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://suno.com/*",
+        "https://*.suno.com/*",
+        "https://suno.ai/*",
+        "https://*.suno.ai/*"
+      ],
+      "js": ["content_main.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://suno.com/*",
+        "https://*.suno.com/*",
+        "https://suno.ai/*",
+        "https://*.suno.ai/*"
+      ],
+      "js": ["content_bridge.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "ISOLATED"
+    }
+  ]
+}

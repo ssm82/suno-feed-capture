@@ -1,0 +1,31 @@
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artefacts
+*.zip
+*.crx
+*.pem
+
+# Node (if you ever add a tooling layer)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local dev overrides
+.env
+.env.local
+config.local.js
+
+# Don't track the user's local storage exports
+exports/
+*.export.json
