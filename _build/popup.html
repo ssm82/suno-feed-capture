@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Suno Feed Capture</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <span class="dot"></span>
+        <h1>Suno Feed Capture</h1>
+      </div>
+      <div class="actions">
+        <button id="export" title="Download all captured items as JSON">Export</button>
+        <button id="clear" class="danger" title="Clear all captured items">Clear</button>
+      </div>
+    </header>
+
+    <div class="meta">
+      <span><b id="count">0</b> unique items</span>
+      <span id="status" class="status"></span>
+    </div>
+
+    <section id="bulk">
+      <div class="bulk-row">
+        <label class="field">
+          <span>Delay</span>
+          <input type="number" id="delayMs" min="0" max="60000" step="100" value="1500" />
+          <span class="unit">ms</span>
+        </label>
+        <label class="checkbox" title="Download audio files">
+          <input type="checkbox" id="dlAudio" checked /> Audio
+        </label>
+        <label class="checkbox" title="Download video files (if any)">
+          <input type="checkbox" id="dlVideo" /> Video
+        </label>
+      </div>
+      <div class="bulk-row">
+        <button id="download" class="primary">Download all (<span id="dlCount">0</span>)</button>
+        <button id="pause" hidden>Pause</button>
+        <button id="resume" hidden>Resume</button>
+        <button id="stop" class="danger" hidden>Stop</button>
+      </div>
+      <div class="bulk-progress" id="progress" hidden>
+        <div class="progress-bar"><div class="fill" id="progressFill"></div></div>
+        <div class="progress-text" id="progressText">—</div>
+        <div class="errors-row" hidden id="errorsRow">
+          <button id="toggleErrors" class="link">Show errors (<span id="errorCount">0</span>)</button>
+          <button id="clearErrors" class="link">Clear</button>
+        </div>
+        <ul id="errors" hidden></ul>
+      </div>
+    </section>
+
+    <div id="filters">
+      <input id="search" type="search" placeholder="Search title, tag, model..." />
+      <select id="source" title="Filter by capture source">
+        <option value="all">All sources</option>
+      </select>
+      <select id="sort">
+        <option value="capturedAt-desc">Newest captures</option>
+        <option value="createdAt-desc">Newest creations</option>
+        <option value="title-asc">Title A→Z</option>
+        <option value="duration-desc">Longest</option>
+      </select>
+    </div>
+
+    <main id="list"></main>
+
+    <footer>
+      <span>Watching <code>studio-api-prod.suno.com/api/feed/v3</code></span>
+    </footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

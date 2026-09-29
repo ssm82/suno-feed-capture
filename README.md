@@ -17,6 +17,10 @@ receives, and you get a tidy local library of everything you scrolled past.
 - **Live capture** — every clip you see in Suno's feed, library, playlists
   or search results is saved automatically. No manual import, no
   copy-pasting IDs.
+- **On-page Save buttons** — a small "⬇ Save" pill appears next to every
+  song card directly on suno.com. Click it to download that one clip
+  straight to `Downloads/suno-feed/`. Works for captured clips; shows a
+  disabled state for cards you haven't browsed past yet.
 - **Suno-grade parser** — new endpoints work without code changes as
   long as the items follow the standard `id`-bearing shape.
 - **Local-first storage** — items live in `chrome.storage.local` (no
@@ -80,6 +84,15 @@ when idle.
 7. **Export** dumps the entire library as a single JSON file.
 8. **Clear** wipes local storage. There is no undo — export first.
 
+### Saving individual songs from the Suno page
+
+The extension also injects a small "⬇ Save" button next to every song
+card on suno.com. After you browse past a song it becomes active; click
+it to download that single clip immediately (no popup, no queue — it
+goes straight into `Downloads/suno-feed/`). Cards for songs you haven't
+seen yet stay in a disabled state until they get captured by scrolling
+the feed.
+
 ### Bulk download semantics
 
 - Files are saved under `Downloads/suno-capture/<author>/<clipId>.<ext>`.
@@ -131,7 +144,8 @@ observes network responses that the page itself receives.
   expired. Re-opening the corresponding page in Suno regenerates the
   URL, and the next capture will replace the local entry.
 - **No re-encoding**: downloads are saved exactly as Suno serves them.
-  Audio is typically MP3 (variable bitrate), video is MP4.
+  Audio is M4A (Opus-in-MP4, Suno's default playback format since they
+  switched off MP3), video is MP4.
 
 ---
 
