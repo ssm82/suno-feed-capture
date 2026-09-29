@@ -14,6 +14,11 @@ const els = {
   sort: document.getElementById('sort'),
   export: document.getElementById('export'),
   clear: document.getElementById('clear'),
+  // selection toolbar
+  selectionInfo: document.getElementById('selectionInfo'),
+  selectAll: document.getElementById('selectAll'),
+  selectNone: document.getElementById('selectNone'),
+  selectVisible: document.getElementById('selectVisible'),
   // bulk
   delayMs: document.getElementById('delayMs'),
   dlAudio: document.getElementById('dlAudio'),
@@ -38,6 +43,9 @@ let currentQueue = null;
 let currentSettings = null;
 let lastSeen = 0;
 let errorsVisible = false;
+// Selected clip ids. Persists across re-renders; cleared of stale ids whenever
+// the captured set changes. Default: none selected (user opts in per item).
+const selectedIds = new Set();
 
 // ===== Render helpers ==================================================
 
@@ -119,12 +127,34 @@ function render() {
     els.list.appendChild(frag);
   }
 
+  renderSelectionToolbar();
   renderBulk();
 }
 
 function card(it) {
   const el = document.createElement('div');
   el.className = 'card';
+  el.dataset.clipId = it.id || '';
+
+  // Selection checkbox. Clicking it must not also bubble to the card
+  // (cards have no row-click yet, but the label/input separation keeps
+  // keyboard activation isolated too).
+  if (it.id) {
+    const pick = document.createElement('label');
+    pick.className = 'pick';
+    pick.title = 'Mark for download';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = selectedIds.has(it.id);
+    cb.addEventListener('change', () => {
+      if (cb.checked) selectedIds.add(it.id);
+      else selectedIds.delete(it.id);
+      renderSelectionToolbar();
+      renderBulk();
+    });
+    pick.appendChild(cb);
+    el.appendChild(pick);
+  }
 
   const thumb = document.createElement('div');
   thumb.className = 'thumb';
@@ -174,21 +204,6 @@ function card(it) {
   if (it.createdAt) meta.appendChild(chip('made ' + new Date(it.createdAt).toLocaleDateString()));
   meta.appendChild(chip('captured ' + fmtTime(it.capturedAt)));
   info.appendChild(meta);
-
-  if (it.audioUrl) {
-    const audio = document.createElement('audio');
-    audio.controls = true;
-    audio.preload = 'none';
-    audio.src = it.audioUrl;
-    info.appendChild(audio);
-  } else if (it.videoUrl) {
-    const v = document.createElement('video');
-    v.controls = true;
-    v.preload = 'none';
-    v.src = it.videoUrl;
-    v.style.maxHeight = '180px';
-    info.appendChild(v);
-  }
 
   if (it.id && String(it.id).startsWith('raw-')) {
     const note = document.createElement('div');
@@ -281,10 +296,34 @@ function countDownloadable() {
   if (!inc && !vid) return 0;
   let n = 0;
   for (const it of currentItems) {
+    if (!selectedIds.has(it.id)) continue;
     if (inc && it.audioUrl) n++;
     if (vid && it.videoUrl) n++;
   }
   return n;
+}
+
+// All download URLs we currently have a selection on — used by START_DOWNLOADS.
+function selectedDownloadableItems() {
+  const inc = els.dlAudio.checked;
+  const vid = els.dlVideo.checked;
+  if (!inc && !vid) return [];
+  const out = [];
+  for (const it of currentItems) {
+    if (!selectedIds.has(it.id)) continue;
+    if (inc && it.audioUrl) out.push(it);
+    else if (vid && it.videoUrl) out.push(it);
+  }
+  return out;
+}
+
+function renderSelectionToolbar() {
+  const total = currentItems.length;
+  const sel = selectedIds.size;
+  els.selectionInfo.textContent = `${sel} of ${total} selected`;
+  els.selectAll.disabled = total === 0;
+  els.selectNone.disabled = sel === 0;
+  els.selectVisible.disabled = visibleItems().length === 0;
 }
 
 function renderBulk() {
@@ -353,6 +392,9 @@ function renderBulk() {
 async function loadCaptured() {
   const got = await chrome.storage.local.get(STORAGE_KEY);
   const items = got[STORAGE_KEY] || [];
+  // Drop selections for items that no longer exist in the captured set.
+  const valid = new Set(items.map((it) => it.id));
+  for (const id of selectedIds) if (!valid.has(id)) selectedIds.delete(id);
   const wasEmpty = currentItems.length === 0;
   currentItems = items;
   render();
@@ -420,6 +462,36 @@ els.search.addEventListener('input', render);
 els.source.addEventListener('change', render);
 els.sort.addEventListener('change', render);
 
+els.selectAll.addEventListener('click', () => {
+  for (const it of currentItems) selectedIds.add(it.id);
+  refreshCheckboxes();
+  renderSelectionToolbar();
+  renderBulk();
+});
+els.selectNone.addEventListener('click', () => {
+  selectedIds.clear();
+  refreshCheckboxes();
+  renderSelectionToolbar();
+  renderBulk();
+});
+els.selectVisible.addEventListener('click', () => {
+  for (const it of visibleItems()) selectedIds.add(it.id);
+  refreshCheckboxes();
+  renderSelectionToolbar();
+  renderBulk();
+});
+
+// Sync the visible checkboxes to the selection state without re-rendering
+// the whole list (which would interrupt scrolling and steal focus).
+function refreshCheckboxes() {
+  const boxes = els.list.querySelectorAll('.card .pick input[type="checkbox"]');
+  for (const cb of boxes) {
+    const id = cb.closest('.card') && cb.closest('.card').dataset.clipId;
+    if (!id) continue;
+    cb.checked = selectedIds.has(id);
+  }
+}
+
 els.dlAudio.addEventListener('change', persistSettingsAndRefresh);
 els.dlVideo.addEventListener('change', persistSettingsAndRefresh);
 els.delayMs.addEventListener('change', persistSettingsAndRefresh);
@@ -455,11 +527,12 @@ els.download.addEventListener('click', async () => {
     flashStatus('pick audio or video');
     return;
   }
-  if (countDownloadable() === 0) {
-    flashStatus('nothing to download');
+  const items = selectedDownloadableItems();
+  if (items.length === 0) {
+    flashStatus(selectedIds.size === 0 ? 'select items first' : 'nothing to download');
     return;
   }
-  const resp = await send('START_DOWNLOADS', { items: currentItems, settings });
+  const resp = await send('START_DOWNLOADS', { items, settings });
   if (!resp || !resp.ok) {
     flashStatus('error: ' + (resp && resp.error || 'unknown'));
   }

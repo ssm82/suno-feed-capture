@@ -392,24 +392,20 @@ async function startDownloads(items, settings) {
   await refreshBadge();
 
   if (liveTab) {
-    // Hand off to the content script in the Suno tab. It walks the queue,
-    // fetches each clip via the API, and reports back via BULK_DOWNLOAD_TICK.
-    chrome.tabs.sendMessage(liveTab.id, {
-      type: 'BULK_DOWNLOAD_RUN',
+    const payload = {
       queue: queue.map((q) => ({ id: q.id, rawId: q.rawId, title: q.title, kind: q.kind })),
       settings: newS,
+    };
+    // Always write to storage first as a reliable fallback — the content
+    // script loads at document_idle and may not be alive when we send the
+    // runtime message. The content script watches the storage key and
+    // will pick up the command either way.
+    chrome.storage.local.set({ __sunoFeedPendingBulk: payload }).catch(() => {});
+    chrome.tabs.sendMessage(liveTab.id, {
+      type: 'BULK_DOWNLOAD_RUN',
+      ...payload,
     }).catch((e) => {
-      // Tab went away or content script not loaded — surface as a hard error.
-      const { q } = stored[QUEUE_KEY] && stored[QUEUE_KEY].active ? stored[QUEUE_KEY] : newQ;
-      q.active = false;
-      q.errors.push({
-        id: 'bulk',
-        title: '(bulk)',
-        url: '',
-        error: 'No live suno.com tab: ' + String((e && e.message) || e),
-      });
-      chrome.storage.local.set({ [QUEUE_KEY]: q }).catch(() => {});
-      refreshBadge();
+      console.debug('[SunoFeed] tabs.sendMessage failed (will rely on storage pickup):', String((e && e.message) || e));
     });
   } else {
     // No Suno tab open. Mark the queue as finished with a clear error so

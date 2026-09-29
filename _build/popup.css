@@ -306,6 +306,40 @@ main {
   overflow-y: auto;
 }
 
+#selection {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: 12px;
+  color: var(--muted);
+}
+#selectionInfo {
+  font-weight: 600;
+  color: var(--text);
+  margin-right: 4px;
+}
+#selection .sep { opacity: .5; }
+#selection .link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+#selection .link:hover { background: rgba(255,255,255,.06); }
+
+.card .pick {
+  flex-shrink: 0;
+  padding-top: 18px;
+  cursor: pointer;
+}
+.card .pick input { cursor: pointer; }
+
 .card {
   padding: 10px 14px;
   border-bottom: 1px solid var(--line);

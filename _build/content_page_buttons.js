@@ -377,57 +377,58 @@
 
   // ---- Card discovery --------------------------------------------------
 
-  // Pick a sibling-or-parent container for the button that lives OUTSIDE
-  // the <a href="/song/<id>"> element. Nesting inside the anchor would make
-  // the save button inherit the anchor's href in the DOM (the rendered
-  // "link" the user sees) and risk the click bubbling into a navigation
-  // even with preventDefault. Walk up to the nearest block container
-  // (div/section/article/li) and place the button as a sibling of the
-  // anchor inside it.
+  // The song title in Suno's card lives in a row with the class
+  //   "flex items-center gap-2 min-w-0"
+  // — flex layout, centered children, with `min-w-0` so the title can
+  // ellipsize. Append the Save button as the last flex child of that row
+  // so it sits naturally next to the title (no absolute positioning, no
+  // z-index fights with hover overlays).
   function findInjectionTarget(anchor) {
-    if (!anchor || anchor.querySelector('.' + BUTTON_CLASS)) return null;
-    // Walk up to the first DIV/SECTION/ARTICLE/LI container. This is the
-    // card itself on Suno; the anchor is a child of that card.
+    if (!anchor) return null;
+    if (anchor.querySelector && anchor.querySelector('.' + BUTTON_CLASS)) return null;
+    const titleRow = anchor.closest('.flex.items-center.gap-2.min-w-0');
+    if (titleRow) return titleRow;
+    // Fallback: walk up to the nearest block container.
     let n = anchor.parentElement;
     for (let i = 0; i < 6 && n; i++) {
       const tag = n.tagName;
       if (tag === 'DIV' || tag === 'SECTION' || tag === 'ARTICLE' || tag === 'LI' || tag === 'MAIN') {
-        // Make sure it's positioned so the absolute button sticks inside.
         const cs = window.getComputedStyle(n);
         if (cs.position === 'static') n.style.position = 'relative';
         return n;
       }
       n = n.parentElement;
     }
-    // Last resort: insert immediately after the anchor as a sibling.
     return null;
   }
 
   function attachButtonToAnchor(anchor, clipId) {
     const btn = makeButton(clipId);
-    const card = findInjectionTarget(anchor);
-    if (card) {
-      btn.style.position = 'absolute';
-      // Bottom-right sits in the empty area below the title and to the
-      // side of any "play count" / "duration" chips. Bumping the z-index
-      // above the typical overlay layer (Suno uses 1-3) keeps it on top
-      // of hover-only action buttons too.
-      btn.style.bottom = '8px';
-      btn.style.right = '8px';
-      btn.style.zIndex = '2147483647';
-      btn.style.pointerEvents = 'auto';
-      // Make sure the card actually accepts the absolute child — Suno's
-      // hover-only wrappers sometimes have overflow:hidden that would
-      // clip the button. Tag it so a CSS override can lift it back out.
-      btn.classList.add(BUTTON_CLASS + '__host');
-      card.appendChild(btn);
+    const target = findInjectionTarget(anchor);
+    if (!target) {
+      if (anchor.parentNode) anchor.parentNode.insertBefore(btn, anchor.nextSibling);
+      else return null;
     } else {
-      // Insert as a sibling right after the anchor.
-      if (anchor.parentNode) {
-        anchor.parentNode.insertBefore(btn, anchor.nextSibling);
+      const isFlexTitleRow = target.classList.contains('flex') &&
+                             target.classList.contains('items-center');
+      if (isFlexTitleRow) {
+        // In flex layout we don't need absolute positioning — let flex
+        // handle placement. `flex-shrink: 0` keeps the button at full
+        // size when the title truncates.
+        btn.style.position = 'static';
+        btn.style.zIndex = '';
+        btn.style.display = 'inline-flex';
+        btn.style.flexShrink = '0';
+        btn.style.marginLeft = '0';
       } else {
-        return null;
+        btn.style.position = 'absolute';
+        btn.style.bottom = '8px';
+        btn.style.right = '8px';
+        btn.style.zIndex = '2147483647';
+        btn.style.pointerEvents = 'auto';
+        btn.classList.add(BUTTON_CLASS + '__host');
       }
+      target.appendChild(btn);
     }
     let set = buttonsByClip.get(clipId);
     if (!set) { set = new Set(); buttonsByClip.set(clipId, set); }
@@ -485,14 +486,45 @@
 
   // Walk the queue passed from the background, fetch each clip via the API,
   // hand the blob to chrome.downloads.download, and report progress back.
+  //
+  // Two delivery paths because the content script loads at document_idle
+  // and may not be alive yet when background fires the message:
+  //   1. chrome.runtime.onMessage — works when the listener is already set.
+  //   2. chrome.storage.onChanged picks up a "pending bulk" command — used
+  //      when (1) doesn't catch it (race during startup or extension reload).
+  const PENDING_BULK_KEY = '__sunoFeedPendingBulk';
+  const processedBulk = new Set();
+
+  const runBulkSafely = (queue, settings) => {
+    const sig = JSON.stringify({ queue, settings });
+    if (processedBulk.has(sig)) return;
+    processedBulk.add(sig);
+    console.debug('[SunoFeed] BULK_DOWNLOAD_RUN', { n: queue.length, settings });
+    runBulkDownload(queue, settings);
+    // Forget the signature after a minute so identical retries still fire,
+    // while keeping memory bounded.
+    setTimeout(() => processedBulk.delete(sig), 60_000);
+  };
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg || msg.type !== 'BULK_DOWNLOAD_RUN') return false;
-    runBulkDownload(msg.queue || [], msg.settings || {}).then(
-      () => sendResponse({ ok: true }),
-      (err) => sendResponse({ ok: false, error: String((err && err.message) || err) })
-    );
+    runBulkSafely(msg.queue || [], msg.settings || {});
+    sendResponse({ ok: true });
     return true;
   });
+
+  if (chrome.storage && chrome.storage.onChanged) {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local') return;
+      const ch = changes[PENDING_BULK_KEY];
+      if (ch && ch.newValue) {
+        const v = ch.newValue;
+        runBulkSafely(v.queue || [], v.settings || {});
+        // Clear so we don't re-process on subsequent polls.
+        chrome.storage.local.remove(PENDING_BULK_KEY).catch(() => {});
+      }
+    });
+  }
 
   async function runBulkDownload(queue, settings) {
     const tick = async (state) => {
