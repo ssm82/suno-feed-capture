@@ -13,6 +13,10 @@ desktop.ini
 *.zip
 *.crx
 *.pem
+# build/ is a mirror of the extension files at the repo root, used only
+# as the input for `zip`. Loading the repo root directly into Chrome also
+# works (8 files at root), so the mirror is redundant in git history.
+build/
 
 # Node (if you ever add a tooling layer)
 node_modules/
