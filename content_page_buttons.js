@@ -436,25 +436,98 @@
     return btn;
   }
 
+  // ---- Card discovery --------------------------------------------------
+
+  // Suno renders the song list through a virtualized scroller: cards that
+  // leave the viewport get unmounted from the DOM. The Save button is a
+  // child of each card's title row, so it disappears with the card.
+  //
+  // Previous scan() blindly trusted the buttonsByClip Map and skipped
+  // re-attaching when the Map said "already have one", so buttons on
+  // cards that scrolled off and back on never came back.
+  //
+  // New design:
+  //   * scan() prunes dead refs (btn.isConnected === false) from the Map,
+  //     then discovers anchors that don't yet have a live button and
+  //     hands them to an IntersectionObserver.
+  //   * The IntersectionObserver attaches the button when the anchor
+  //     enters (or is already in) the viewport, then unobserves it — a
+  //     one-shot attach per anchor.
+  //   * scheduleScan runs via requestIdleCallback so the
+  //     querySelectorAll doesn't fight the rendering pipeline (the prior
+  //     "Forced reflow" violation came from running this during a
+  //     MutationObserver callback on a hot virtualizer).
+  let visibilityObserver = null;
+  function ensureVisibilityObserver() {
+    if (visibilityObserver) return visibilityObserver;
+    visibilityObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const anchor = entry.target;
+        visibilityObserver.unobserve(anchor);
+        if (!entry.isIntersecting) continue;
+        if (!anchor.isConnected) continue;
+        const m = anchor.getAttribute('href').match(SONG_HREF_RE);
+        if (!m) continue;
+        attachButtonToAnchor(anchor, m[1]);
+      }
+    }, { rootMargin: '100px 0px', threshold: 0.01 });
+    return visibilityObserver;
+  }
+
   function scan() {
     scanScheduled = false;
+    // 1) Prune: drop tracked buttons whose DOM nodes have been unmounted
+    //    by the virtualizer. Without this step, scan() would skip
+    //    re-attaching because the Map still has an entry for that clip.
+    let pruned = 0;
+    for (const [clipId, set] of Array.from(buttonsByClip.entries())) {
+      for (const btn of Array.from(set)) {
+        if (!btn.isConnected) {
+          set.delete(btn);
+          pruned++;
+        }
+      }
+      if (set.size === 0) buttonsByClip.delete(clipId);
+    }
+    // 2) Discover anchors that don't yet have a live button, and observe
+    //    them. IO callback attaches the button when the anchor is (or
+    //    becomes) visible.
     const anchors = document.querySelectorAll('a[href*="/song/"]');
-    let attached = 0;
+    const io = ensureVisibilityObserver();
+    let observed = 0;
     for (const a of anchors) {
       const m = a.getAttribute('href').match(SONG_HREF_RE);
       if (!m) continue;
       const clipId = m[1];
       const existing = buttonsByClip.get(clipId);
-      if (existing && existing.size > 0) continue;
-      attachButtonToAnchor(a, clipId);
-      attached++;
+      if (existing) {
+        let live = false;
+        for (const b of existing) {
+          if (b.isConnected) { live = true; break; }
+        }
+        if (live) continue; // already attached and still in the DOM
+      }
+      io.observe(a);
+      observed++;
+    }
+    if (pruned > 0 || observed > 0) {
+      console.debug('[SunoFeed] scan', { pruned, observed, total: anchors.length });
     }
   }
 
   function scheduleScan() {
     if (scanScheduled) return;
     scanScheduled = true;
-    setTimeout(scan, SCAN_THROTTLE_MS);
+    // requestIdleCallback avoids the "Forced reflow while executing
+    // JavaScript" violation by deferring querySelectorAll until the
+    // main thread is idle (with a hard timeout fallback for browsers
+    // without rIC, and for cases where rIC never fires during a busy
+    // scroll).
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(() => scan(), { timeout: 1000 });
+    } else {
+      setTimeout(scan, SCAN_THROTTLE_MS);
+    }
   }
 
   // ---- Storage sync ---------------------------------------------------
@@ -487,19 +560,38 @@
   // Walk the queue passed from the background, fetch each clip via the API,
   // hand the blob to chrome.downloads.download, and report progress back.
   //
-  // Two delivery paths because the content script loads at document_idle
-  // and may not be alive yet when background fires the message:
-  //   1. chrome.runtime.onMessage — works when the listener is already set.
-  //   2. chrome.storage.onChanged picks up a "pending bulk" command — used
-  //      when (1) doesn't catch it (race during startup or extension reload).
+  // Single delivery path: chrome.runtime.onMessage fires only in the
+  // targeted Suno tab, so there is no cross-tab duplication.
+  //
+  // We also do a one-time chrome.storage.local.get() at startup as a
+  // fallback for the narrow race where the content script loads AFTER
+  // background wrote the pending-bulk key (background fires sendMessage
+  // at startDownloads time; if the listener isn't registered yet, the
+  // message is lost — the startup get catches that case).
+  //
+  // NB: a chrome.storage.onChanged watcher was previously the fallback
+  // here. It was removed because storage.onChanged fires globally in
+  // EVERY extension context that has a listener — meaning every open
+  // Suno tab would independently run BULK_DOWNLOAD_RUN, producing a
+  // duplicate download per tab (dedup is per-IIFE, not cross-tab).
   const PENDING_BULK_KEY = '__sunoFeedPendingBulk';
   const processedBulk = new Set();
 
   const runBulkSafely = (queue, settings) => {
     const sig = JSON.stringify({ queue, settings });
-    if (processedBulk.has(sig)) return;
+    if (processedBulk.has(sig)) {
+      console.debug('[SunoFeed] BULK_DOWNLOAD_RUN deduped', {
+        n: (queue || []).length,
+        sigLen: sig.length,
+      });
+      return;
+    }
     processedBulk.add(sig);
-    console.debug('[SunoFeed] BULK_DOWNLOAD_RUN', { n: queue.length, settings });
+    console.debug('[SunoFeed] BULK_DOWNLOAD_RUN', {
+      n: (queue || []).length,
+      settings,
+      origin: runBulkSafely._origin || 'runtime',
+    });
     runBulkDownload(queue, settings);
     // Forget the signature after a minute so identical retries still fire,
     // while keeping memory bounded.
@@ -508,23 +600,36 @@
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg || msg.type !== 'BULK_DOWNLOAD_RUN') return false;
+    runBulkSafely._origin = 'runtime';
     runBulkSafely(msg.queue || [], msg.settings || {});
     sendResponse({ ok: true });
     return true;
   });
 
-  if (chrome.storage && chrome.storage.onChanged) {
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== 'local') return;
-      const ch = changes[PENDING_BULK_KEY];
-      if (ch && ch.newValue) {
-        const v = ch.newValue;
-        runBulkSafely(v.queue || [], v.settings || {});
-        // Clear so we don't re-process on subsequent polls.
-        chrome.storage.local.remove(PENDING_BULK_KEY).catch(() => {});
+  // One-time startup pickup. Runs exactly once per IIFE, so no cross-tab
+  // duplication. Catches the rare race where background wrote the
+  // pending-bulk key before this content script's message listener was
+  // registered.
+  (async function startupPickupPendingBulk() {
+    if (!chrome.storage || !chrome.storage.local) return;
+    try {
+      const got = await chrome.storage.local.get(PENDING_BULK_KEY);
+      const v = got && got[PENDING_BULK_KEY];
+      if (!v) {
+        console.debug('[SunoFeed] bulk startup pickup: no pending key');
+        return;
       }
-    });
-  }
+      console.debug('[SunoFeed] bulk startup pickup: found pending bulk', {
+        n: (v.queue || []).length,
+      });
+      runBulkSafely._origin = 'startup';
+      runBulkSafely(v.queue || [], v.settings || {});
+      // Clear so a subsequent reload won't replay it.
+      chrome.storage.local.remove(PENDING_BULK_KEY).catch(() => {});
+    } catch (e) {
+      console.debug('[SunoFeed] bulk startup pickup failed', e);
+    }
+  })();
 
   async function runBulkDownload(queue, settings) {
     const tick = async (state) => {
@@ -587,8 +692,10 @@
   });
 
   // SPA route changes do not reload the page; Suno re-renders the card
-  // list, so a periodic catch-up is cheap insurance.
-  setInterval(scan, 4000);
+  // list, so a periodic catch-up is cheap insurance. We go through
+  // scheduleScan so the tick is coalesced with any pending rIC — no
+  // concurrent scans.
+  setInterval(scheduleScan, 4000);
 
   console.debug('[SunoFeed] content_page_buttons.js installed');
 })();

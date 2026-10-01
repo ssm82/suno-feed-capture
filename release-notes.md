@@ -1,4 +1,26 @@
-## Suno Feed Capture v1.8.1
+## Suno Feed Capture v1.8.2
+
+### What's new (1.8.2)
+
+- **No more double bulk downloads** — `BULK_DOWNLOAD_RUN` is now
+  delivered exclusively via `chrome.runtime.onMessage` (targeted to the
+  chosen Suno tab). The previous `chrome.storage.onChanged` fallback
+  fired globally in every extension context, which made every open
+  Suno tab run the bulk download independently and download the queue
+  once per tab. The race with `document_idle` is now covered by a
+  one-time `chrome.storage.local.get()` pickup at content-script init.
+- **Save buttons survive virtualization** — Suno's virtualized list
+  unmounts off-screen cards, which used to detach our Save buttons and
+  leave holes after scrolling. The scan now prunes dead refs from the
+  tracking Map (via `isConnected`) and an `IntersectionObserver`
+  re-attaches the button when the same clip scrolls back into view.
+- **No more "Forced reflow" violations** — the scan runs through
+  `requestIdleCallback` instead of a `setTimeout` inside the
+  `MutationObserver` callback, so `querySelectorAll` no longer fights
+  the renderer during scroll.
+- **Diagnostic logging** — `[SunoFeed] scan {pruned, observed, total}`,
+  `[SunoFeed] BULK_DOWNLOAD_RUN {origin: runtime|startup}` and a
+  `deduped` counterpart make it easy to spot regressions in DevTools.
 
 ### What's new (1.8.1)
 
@@ -29,7 +51,7 @@
 
 ### Installation
 
-1. Download `suno-feed-capture-1.8.1.zip` below
+1. Download `suno-feed-capture-1.8.2.zip` below
 2. Unzip it
 3. Open `chrome://extensions/`, enable **Developer mode** (top-right)
 4. Click **Load unpacked** and select the unzipped folder
